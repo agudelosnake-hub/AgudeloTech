@@ -135,8 +135,8 @@ function inicializarNavegacion() {
     
     linksNavegacion.forEach(link => {
       link.classList.remove('active');
-      const href = link.getAttribute('href').substring(1);
-      if (href === seccionActual) {
+      const href = link.getAttribute('href').substring(1).toLowerCase();
+      if (href === seccionActual.toLowerCase()) {
         link.classList.add('active');
       }
     });
@@ -194,6 +194,78 @@ function inicializarCarrusel() {
       }
     });
 
+    // ==========================
+    // Flechas de navegación manual
+    // ==========================
+    const prevBtn = document.getElementById('prevBtn');
+    const nextBtn = document.getElementById('nextBtn');
+    const productos = Array.from(trackCompras.querySelectorAll('.producto'));
+    let indiceActual = 0;
+    let productosVisibles = Math.floor(trackCompras.offsetWidth / productos[0].offsetWidth);
+
+    if (prevBtn && nextBtn) {
+      // Función para actualizar estado de botones
+      function actualizarBotones() {
+        prevBtn.disabled = indiceActual <= 0;
+        nextBtn.disabled = indiceActual >= productos.length - productosVisibles;
+      }
+
+      // Mover hacia la izquierda
+      prevBtn.addEventListener('click', () => {
+        if (indiceActual > 0) {
+          // 1. Detener animación CSS
+          trackCompras.style.animation = 'none';
+          
+          // 2. Actualizar posición
+          indiceActual--;
+          const desplazamiento = -indiceActual * productos[0].offsetWidth;
+          trackCompras.style.transform = `translateX(${desplazamiento}px)`;
+          trackCompras.style.transition = 'transform 0.4s ease';
+          actualizarBotones();
+          
+          // 3. Pausar scroll automático
+          if (estado.autoScrollActivo) {
+            estado.autoScrollActivo = false;
+            trackCompras.style.animationPlayState = 'paused';
+            botonToggle.textContent = '▶ Reanudar';
+            botonToggle.classList.add('pausado');
+          }
+        }
+      });
+
+      // Mover hacia la derecha
+      nextBtn.addEventListener('click', () => {
+        if (indiceActual < productos.length - productosVisibles) {
+          // 1. Detener animación CSS
+          trackCompras.style.animation = 'none';
+          
+          // 2. Actualizar posición
+          indiceActual++;
+          const desplazamiento = -indiceActual * productos[0].offsetWidth;
+          trackCompras.style.transform = `translateX(${desplazamiento}px)`;
+          trackCompras.style.transition = 'transform 0.4s ease';
+          actualizarBotones();
+          
+          // 3. Pausar scroll automático
+          if (estado.autoScrollActivo) {
+            estado.autoScrollActivo = false;
+            trackCompras.style.animationPlayState = 'paused';
+            botonToggle.textContent = '▶ Reanudar';
+            botonToggle.classList.add('pausado');
+          }
+        }
+      });
+
+      // Actualizar estado inicial
+      actualizarBotones();
+
+      // Recalcular al redimensionar
+      window.addEventListener('resize', debounce(() => {
+        productosVisibles = Math.floor(trackCompras.offsetWidth / productos[0].offsetWidth);
+        actualizarBotones();
+      }, 250));
+    }
+
     // Pausar al interactuar (si está configurado)
     if (config.carrusel.pausaAlInteractuar) {
       trackCompras.addEventListener('mouseenter', () => {
@@ -217,7 +289,6 @@ function inicializarCarrusel() {
 
       trackCompras.addEventListener('touchend', () => {
         if (estado.autoScrollActivo) {
-          // Solo reanudar después de un breve retraso
           setTimeout(() => {
             if (estado.autoScrollActivo) {
               trackCompras.style.animationPlayState = 'running';
@@ -238,51 +309,48 @@ function inicializarTarjetaTecnico() {
   
   if (toggleTecnico && cajaTecnico) {
     toggleTecnico.addEventListener('click', function(e) {
-      e.stopPropagation();
-      estado.tarjetaTecnicoAbierta = !estado.tarjetaTecnicoAbierta;
-      
-      if (estado.tarjetaTecnicoAbierta) {
-        cajaTecnico.classList.add('open');
-        this.style.transform = 'scale(1.1)';
-      } else {
-        cajaTecnico.classList.remove('open');
-        this.style.transform = 'scale(1)';
-      }
-    });
+  e.stopPropagation();
+  
+  if (!estado.tarjetaTecnicoAbierta) {
+    // ABRIR: añadir clase 'open' directamente
+    cajaTecnico.classList.add('open');
+    cajaTecnico.classList.remove('closing'); // por si acaso
+    estado.tarjetaTecnicoAbierta = true;
+    this.style.transform = 'scale(1.1)';
+  } else {
+    // CERRAR: primero aplicar animación de salida, luego remover 'open'
+    cajaTecnico.classList.add('closing');
+    cajaTecnico.classList.remove('open');
+    
+    // Esperar a que termine la animación antes de cambiar el estado
+    setTimeout(() => {
+      estado.tarjetaTecnicoAbierta = false;
+      toggleTecnico.style.transform = 'scale(1)';
+    }, 400); // debe coincidir con la duración de fadeOutDown
+  }
+});
 
     // Cerrar al hacer clic fuera
-    document.addEventListener('click', function(e) {
-      if (estado.tarjetaTecnicoAbierta && 
-          !cajaTecnico.contains(e.target) && 
-          !toggleTecnico.contains(e.target)) {
-        estado.tarjetaTecnicoAbierta = false;
-        cajaTecnico.classList.remove('open');
-        toggleTecnico.style.transform = 'scale(1)';
-      }
-    });
+    // Cerrar al hacer clic fuera
+document.addEventListener('click', function(e) {
+  if (estado.tarjetaTecnicoAbierta && 
+      !cajaTecnico.contains(e.target) && 
+      !toggleTecnico.contains(e.target)) {
+    
+    cajaTecnico.classList.add('closing');
+    cajaTecnico.classList.remove('open');
+    
+    setTimeout(() => {
+      estado.tarjetaTecnicoAbierta = false;
+      toggleTecnico.style.transform = 'scale(1)';
+    }, 400);
+  }
+});
 
     // Prevenir que el clic en la tarjeta la cierre
     cajaTecnico.addEventListener('click', function(e) {
       e.stopPropagation();
     });
-  }
-
-  // Mover botón flotante con scroll
-  const fabTecnico = document.querySelector('.tecnico-fab');
-  if (fabTecnico) {
-    window.addEventListener('scroll', debounce(function() {
-      const scrollPos = window.scrollY;
-      const maxTop = document.body.scrollHeight - 120;
-      fabTecnico.style.top = `${Math.min(scrollPos + window.innerHeight - 100, maxTop)}px`;
-      
-      // Efecto de header al hacer scroll
-      const header = document.querySelector('header');
-      if (scrollPos > 100) {
-        header.classList.add('header-scrolled');
-      } else {
-        header.classList.remove('header-scrolled');
-      }
-    }, 50));
   }
 }
 
@@ -421,7 +489,6 @@ function precargarImagenes() {
       entries.forEach(entry => {
         if (entry.isIntersecting) {
           const img = entry.target;
-          // usa data-src si existe, si no mantiene el src actual
           if (img.dataset && img.dataset.src) {
             img.src = img.dataset.src;
           }
