@@ -26,7 +26,8 @@ let estado = {
   autoScrollActivo: true,
   menuAbierto: false,
   tarjetaTecnicoAbierta: false,
-  ultimaPosicionScroll: 0
+  ultimaPosicionScroll: 0,
+  timeoutReanudar: null // <-- Para reanudar automáticamente
 };
 
 // ==========================
@@ -40,8 +41,9 @@ document.addEventListener('DOMContentLoaded', function() {
   inicializarTarjetaTecnico();
   inicializarEventosGlobales();
   inicializarEfectosEspeciales();
+  inicializarModoOscuro(); // <-- Nuevo: inicializar modo claro/oscuro
   duplicarProductosCarrusel();
-  precargarImagenes(); // llamada temprana; también hay listener al load más abajo
+  precargarImagenes();
 });
 
 // ==========================
@@ -97,30 +99,25 @@ function inicializarNavegacion() {
   const navLinks = document.getElementById('nav-links');
   
   if (menuToggle && navLinks) {
-    // Asegurar estado inicial de aria-expanded
     menuToggle.setAttribute('aria-expanded', 'false');
 
     menuToggle.addEventListener('click', function() {
       estado.menuAbierto = !estado.menuAbierto;
       this.setAttribute('aria-expanded', String(estado.menuAbierto));
       navLinks.classList.toggle('open');
-      
-      // Cambiar ícono del menú
       this.textContent = estado.menuAbierto ? '✕' : '☰';
     });
 
-    // Cerrar menú al hacer clic en un enlace (mobile)
     document.querySelectorAll('#nav-links a').forEach(link => {
       link.addEventListener('click', () => {
         if (window.innerWidth <= 768 && estado.menuAbierto) {
-          // Pulsar el toggle para que ejecute la misma lógica (cambia aria-expanded, texto e .open)
           menuToggle.click();
         }
       });
     });
   }
 
-  // ScrollSpy para resaltar sección actual
+  // ScrollSpy
   window.addEventListener('scroll', debounce(function() {
     const secciones = document.querySelectorAll('main, section[id]');
     const linksNavegacion = document.querySelectorAll('#nav-links a');
@@ -156,8 +153,6 @@ function inicializarObservadores() {
     entradas.forEach(entrada => {
       if (entrada.isIntersecting) {
         entrada.target.classList.add('visible');
-        
-        // Retardo progresivo para productos
         if (entrada.target.classList.contains('producto')) {
           entrada.target.style.transitionDelay = `${Math.random() * 0.3}s`;
         }
@@ -165,7 +160,6 @@ function inicializarObservadores() {
     });
   }, opciones);
 
-  // Observar secciones y productos
   document.querySelectorAll('main, section, .producto').forEach(elemento => {
     observador.observe(elemento);
   });
@@ -179,7 +173,6 @@ function inicializarCarrusel() {
   const trackCompras = document.querySelector('.compras-track');
   
   if (botonToggle && trackCompras) {
-    // Control manual del carrusel
     botonToggle.addEventListener('click', function() {
       estado.autoScrollActivo = !estado.autoScrollActivo;
       
@@ -187,6 +180,10 @@ function inicializarCarrusel() {
         trackCompras.style.animationPlayState = 'running';
         this.textContent = '⏸ Pausar';
         this.classList.remove('pausado');
+        if (estado.timeoutReanudar) {
+          clearTimeout(estado.timeoutReanudar);
+          estado.timeoutReanudar = null;
+        }
       } else {
         trackCompras.style.animationPlayState = 'paused';
         this.textContent = '▶ Reanudar';
@@ -194,9 +191,7 @@ function inicializarCarrusel() {
       }
     });
 
-    // ==========================
-    // Flechas de navegación manual
-    // ==========================
+    // Flechas de navegación
     const prevBtn = document.getElementById('prevBtn');
     const nextBtn = document.getElementById('nextBtn');
     const productos = Array.from(trackCompras.querySelectorAll('.producto'));
@@ -204,86 +199,212 @@ function inicializarCarrusel() {
     let productosVisibles = Math.floor(trackCompras.offsetWidth / productos[0].offsetWidth);
 
     if (prevBtn && nextBtn) {
-      // Función para actualizar estado de botones
       function actualizarBotones() {
         prevBtn.disabled = indiceActual <= 0;
         nextBtn.disabled = indiceActual >= productos.length - productosVisibles;
       }
 
-      // Mover hacia la izquierda
       prevBtn.addEventListener('click', () => {
         if (indiceActual > 0) {
-          // 1. Detener animación CSS
           trackCompras.style.animation = 'none';
-          
-          // 2. Actualizar posición
           indiceActual--;
           const desplazamiento = -indiceActual * productos[0].offsetWidth;
           trackCompras.style.transform = `translateX(${desplazamiento}px)`;
           trackCompras.style.transition = 'transform 0.4s ease';
           actualizarBotones();
-          
-          // 3. Pausar scroll automático
           if (estado.autoScrollActivo) {
             estado.autoScrollActivo = false;
             trackCompras.style.animationPlayState = 'paused';
             botonToggle.textContent = '▶ Reanudar';
             botonToggle.classList.add('pausado');
+            programarReanudacion();
           }
         }
       });
 
-      // Mover hacia la derecha
       nextBtn.addEventListener('click', () => {
         if (indiceActual < productos.length - productosVisibles) {
-          // 1. Detener animación CSS
           trackCompras.style.animation = 'none';
-          
-          // 2. Actualizar posición
           indiceActual++;
           const desplazamiento = -indiceActual * productos[0].offsetWidth;
           trackCompras.style.transform = `translateX(${desplazamiento}px)`;
           trackCompras.style.transition = 'transform 0.4s ease';
           actualizarBotones();
-          
-          // 3. Pausar scroll automático
           if (estado.autoScrollActivo) {
             estado.autoScrollActivo = false;
             trackCompras.style.animationPlayState = 'paused';
             botonToggle.textContent = '▶ Reanudar';
             botonToggle.classList.add('pausado');
+            programarReanudacion();
           }
         }
       });
 
-      // Actualizar estado inicial
       actualizarBotones();
 
-      // Recalcular al redimensionar
       window.addEventListener('resize', debounce(() => {
         productosVisibles = Math.floor(trackCompras.offsetWidth / productos[0].offsetWidth);
         actualizarBotones();
       }, 250));
     }
 
-    // Pausar al interactuar (si está configurado)
+    // Indicadores de puntos
+    const indicadoresContainer = document.getElementById('indicadoresCarrusel');
+    let puntos = [];
+
+    function crearIndicadores() {
+      indicadoresContainer.innerHTML = '';
+      puntos = [];
+      const totalPuntos = Math.ceil(productos.length / productosVisibles);
+
+      for (let i = 0; i < totalPuntos; i++) {
+        const punto = document.createElement('div');
+        punto.classList.add('punto');
+        punto.setAttribute('data-indice', i);
+        punto.setAttribute('role', 'button');
+        punto.setAttribute('aria-label', `Ir al grupo ${i + 1}`);
+        punto.setAttribute('tabindex', '0');
+
+        punto.addEventListener('click', () => irAPunto(i));
+        punto.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            irAPunto(i);
+          }
+        });
+
+        indicadoresContainer.appendChild(punto);
+        puntos.push(punto);
+      }
+      actualizarPuntoActivo();
+    }
+
+    function actualizarPuntoActivo() {
+      const indicePunto = Math.floor(indiceActual / productosVisibles);
+      puntos.forEach((punto, i) => {
+        if (i === indicePunto) {
+          punto.classList.add('activo');
+          punto.setAttribute('aria-current', 'true');
+        } else {
+          punto.classList.remove('activo');
+          punto.removeAttribute('aria-current');
+        }
+      });
+    }
+
+    function irAPunto(indicePunto) {
+      const nuevoIndice = indicePunto * productosVisibles;
+      indiceActual = Math.min(nuevoIndice, productos.length - productosVisibles);
+      trackCompras.style.animation = 'none';
+      const desplazamiento = -indiceActual * productos[0].offsetWidth;
+      trackCompras.style.transform = `translateX(${desplazamiento}px)`;
+      trackCompras.style.transition = 'transform 0.5s ease';
+      if (estado.autoScrollActivo) {
+        estado.autoScrollActivo = false;
+        trackCompras.style.animationPlayState = 'paused';
+        botonToggle.textContent = '▶ Reanudar';
+        botonToggle.classList.add('pausado');
+        programarReanudacion();
+      }
+      actualizarBotones();
+      actualizarPuntoActivo();
+    }
+
+    crearIndicadores();
+
+    window.addEventListener('resize', debounce(() => {
+      productosVisibles = Math.floor(trackCompras.offsetWidth / productos[0].offsetWidth);
+      crearIndicadores();
+      actualizarBotones();
+    }, 250));
+
+    const actualizarPuntoOriginal = actualizarBotones;
+    actualizarBotones = function() {
+      actualizarPuntoOriginal();
+      actualizarPuntoActivo();
+    }
+
+    // Soporte táctil (swipe)
+    let touchStartX = 0;
+    let touchEndX = 0;
+
+    trackCompras.addEventListener('touchstart', (e) => {
+      touchStartX = e.changedTouches[0].screenX;
+    }, { passive: true });
+
+    trackCompras.addEventListener('touchend', (e) => {
+      touchEndX = e.changedTouches[0].screenX;
+      handleSwipe();
+    }, { passive: true });
+
+    function handleSwipe() {
+      const diff = touchStartX - touchEndX;
+      const umbral = 50;
+      if (Math.abs(diff) < umbral) return;
+
+      trackCompras.style.animation = 'none';
+      if (estado.autoScrollActivo) {
+        estado.autoScrollActivo = false;
+        trackCompras.style.animationPlayState = 'paused';
+        botonToggle.textContent = '▶ Reanudar';
+        botonToggle.classList.add('pausado');
+        programarReanudacion();
+      }
+
+      if (diff > 0) {
+        if (indiceActual < productos.length - productosVisibles) {
+          indiceActual++;
+        }
+      } else {
+        if (indiceActual > 0) {
+          indiceActual--;
+        }
+      }
+
+      const desplazamiento = -indiceActual * productos[0].offsetWidth;
+      trackCompras.style.transform = `translateX(${desplazamiento}px)`;
+      trackCompras.style.transition = 'transform 0.4s ease';
+      actualizarBotones();
+    }
+
+    // Función para reanudar automáticamente
+    function programarReanudacion() {
+      if (estado.timeoutReanudar) clearTimeout(estado.timeoutReanudar);
+      estado.timeoutReanudar = setTimeout(() => {
+        if (!estado.autoScrollActivo) {
+          estado.autoScrollActivo = true;
+          trackCompras.style.animation = '';
+          trackCompras.style.animationPlayState = 'running';
+          botonToggle.textContent = '⏸ Pausar';
+          botonToggle.classList.remove('pausado');
+        }
+        estado.timeoutReanudar = null;
+      }, 3000);
+    }
+
+    // Pausar al interactuar
     if (config.carrusel.pausaAlInteractuar) {
       trackCompras.addEventListener('mouseenter', () => {
         if (estado.autoScrollActivo) {
           trackCompras.style.animationPlayState = 'paused';
+          programarReanudacion();
         }
       });
 
       trackCompras.addEventListener('mouseleave', () => {
         if (estado.autoScrollActivo) {
           trackCompras.style.animationPlayState = 'running';
+          if (estado.timeoutReanudar) {
+            clearTimeout(estado.timeoutReanudar);
+            estado.timeoutReanudar = null;
+          }
         }
       });
 
-      // Para dispositivos táctiles
       trackCompras.addEventListener('touchstart', () => {
         if (estado.autoScrollActivo) {
           trackCompras.style.animationPlayState = 'paused';
+          programarReanudacion();
         }
       });
 
@@ -292,6 +413,10 @@ function inicializarCarrusel() {
           setTimeout(() => {
             if (estado.autoScrollActivo) {
               trackCompras.style.animationPlayState = 'running';
+              if (estado.timeoutReanudar) {
+                clearTimeout(estado.timeoutReanudar);
+                estado.timeoutReanudar = null;
+              }
             }
           }, 1500);
         }
@@ -309,45 +434,35 @@ function inicializarTarjetaTecnico() {
   
   if (toggleTecnico && cajaTecnico) {
     toggleTecnico.addEventListener('click', function(e) {
-  e.stopPropagation();
-  
-  if (!estado.tarjetaTecnicoAbierta) {
-    // ABRIR: añadir clase 'open' directamente
-    cajaTecnico.classList.add('open');
-    cajaTecnico.classList.remove('closing'); // por si acaso
-    estado.tarjetaTecnicoAbierta = true;
-    this.style.transform = 'scale(1.1)';
-  } else {
-    // CERRAR: primero aplicar animación de salida, luego remover 'open'
-    cajaTecnico.classList.add('closing');
-    cajaTecnico.classList.remove('open');
-    
-    // Esperar a que termine la animación antes de cambiar el estado
-    setTimeout(() => {
-      estado.tarjetaTecnicoAbierta = false;
-      toggleTecnico.style.transform = 'scale(1)';
-    }, 400); // debe coincidir con la duración de fadeOutDown
-  }
-});
+      e.stopPropagation();
+      if (!estado.tarjetaTecnicoAbierta) {
+        cajaTecnico.classList.add('open');
+        cajaTecnico.classList.remove('closing');
+        estado.tarjetaTecnicoAbierta = true;
+        this.style.transform = 'scale(1.1)';
+      } else {
+        cajaTecnico.classList.add('closing');
+        cajaTecnico.classList.remove('open');
+        setTimeout(() => {
+          estado.tarjetaTecnicoAbierta = false;
+          toggleTecnico.style.transform = 'scale(1)';
+        }, 400);
+      }
+    });
 
-    // Cerrar al hacer clic fuera
-    // Cerrar al hacer clic fuera
-document.addEventListener('click', function(e) {
-  if (estado.tarjetaTecnicoAbierta && 
-      !cajaTecnico.contains(e.target) && 
-      !toggleTecnico.contains(e.target)) {
-    
-    cajaTecnico.classList.add('closing');
-    cajaTecnico.classList.remove('open');
-    
-    setTimeout(() => {
-      estado.tarjetaTecnicoAbierta = false;
-      toggleTecnico.style.transform = 'scale(1)';
-    }, 400);
-  }
-});
+    document.addEventListener('click', function(e) {
+      if (estado.tarjetaTecnicoAbierta && 
+          !cajaTecnico.contains(e.target) && 
+          !toggleTecnico.contains(e.target)) {
+        cajaTecnico.classList.add('closing');
+        cajaTecnico.classList.remove('open');
+        setTimeout(() => {
+          estado.tarjetaTecnicoAbierta = false;
+          toggleTecnico.style.transform = 'scale(1)';
+        }, 400);
+      }
+    });
 
-    // Prevenir que el clic en la tarjeta la cierre
     cajaTecnico.addEventListener('click', function(e) {
       e.stopPropagation();
     });
@@ -358,29 +473,72 @@ document.addEventListener('click', function(e) {
 // Efectos especiales e interacciones
 // ==========================
 function inicializarEfectosEspeciales() {
-  // Efecto de levitación para botones
+  // Levitación botones
   document.querySelectorAll('.btn-principal, .btn-secundario, .btn-whatsapp').forEach(boton => {
     boton.addEventListener('mouseenter', function() {
       this.style.transform = 'translateY(-3px)';
     });
-    
     boton.addEventListener('mouseleave', function() {
       this.style.transform = 'translateY(0)';
     });
   });
 
-  // Efectos para productos
+  // Efectos productos
   document.querySelectorAll('.producto').forEach(producto => {
     producto.addEventListener('mouseenter', function() {
       this.style.zIndex = '10';
     });
-    
     producto.addEventListener('mouseleave', function() {
       this.style.zIndex = '1';
     });
   });
 
-  // Animación del logo al hacer clic
+  // Zoom en imagen de producto
+  const modalZoom = document.getElementById('modalZoom');
+  const imagenZoom = document.getElementById('imagenZoom');
+  const cerrarModal = document.querySelector('.cerrar-modal');
+
+  document.querySelectorAll('.producto img').forEach(img => {
+    img.addEventListener('click', function(e) {
+      e.stopPropagation();
+      if (this.dataset.src) {
+        imagenZoom.src = this.dataset.src;
+      } else {
+        imagenZoom.src = this.src;
+      }
+      modalZoom.classList.add('abierto');
+      modalZoom.setAttribute('aria-hidden', 'false');
+      document.body.style.overflow = 'hidden';
+    });
+  });
+
+  if (cerrarModal) {
+    cerrarModal.addEventListener('click', cerrarModalZoom);
+  }
+
+  if (modalZoom) {
+    modalZoom.addEventListener('click', function(e) {
+      if (e.target === modalZoom) {
+        cerrarModalZoom();
+      }
+    });
+  }
+
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape' && modalZoom && modalZoom.classList.contains('abierto')) {
+      cerrarModalZoom();
+    }
+  });
+
+  function cerrarModalZoom() {
+    if (modalZoom) {
+      modalZoom.classList.remove('abierto');
+      modalZoom.setAttribute('aria-hidden', 'true');
+      document.body.style.overflow = '';
+    }
+  }
+
+  // Logo bienvenida
   const logoBienvenida = document.querySelector('.logo-bienvenida img');
   if (logoBienvenida) {
     logoBienvenida.addEventListener('click', function(e) {
@@ -400,22 +558,19 @@ function inicializarEfectosEspeciales() {
 // Eventos globales y utilidades
 // ==========================
 function inicializarEventosGlobales() {
-  // Scroll suave para enlaces internos
+  // Scroll suave
   document.querySelectorAll('a[href^="#"]').forEach(enlace => {
     enlace.addEventListener('click', function(e) {
       const href = this.getAttribute('href');
-      
       if (href === '#' || href === '#inicio') {
         window.scrollTo({ top: 0, behavior: 'smooth' });
         e.preventDefault();
         return;
       }
-      
       const destino = document.querySelector(href);
       if (destino) {
         e.preventDefault();
         const posicion = destino.offsetTop - 80;
-        
         window.scrollTo({
           top: posicion,
           behavior: 'smooth'
@@ -424,20 +579,54 @@ function inicializarEventosGlobales() {
     });
   });
 
-  // Optimizar comportamiento en resize
+  // Responsive
   window.addEventListener('resize', debounce(function() {
-    // Cerrar menú y tarjeta técnica en móviles al cambiar orientación
     if (window.innerWidth > 768 && estado.menuAbierto) {
       const menuToggle = document.querySelector('.menu-toggle');
       if (menuToggle) menuToggle.click();
     }
-    
     if (window.innerWidth <= 768 && estado.tarjetaTecnicoAbierta) {
       const caja = document.querySelector('.tecnico-box');
       if (caja) caja.classList.remove('open');
       estado.tarjetaTecnicoAbierta = false;
     }
   }, 250));
+}
+
+// ==========================
+// Modo Claro/Oscuro
+// ==========================
+function inicializarModoOscuro() {
+  const darkModeToggle = document.getElementById('darkModeToggle');
+  const root = document.documentElement;
+
+  // Cargar preferencia guardada
+  if (localStorage.getItem('modoOscuro') === 'false') {
+    root.classList.add('modo-claro');
+    if (darkModeToggle) darkModeToggle.innerHTML = '<i class="fas fa-sun"></i>';
+  } else if (localStorage.getItem('modoOscuro') === null) {
+    // Detectar preferencia del sistema
+    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) {
+      root.classList.add('modo-claro');
+      if (darkModeToggle) darkModeToggle.innerHTML = '<i class="fas fa-sun"></i>';
+      localStorage.setItem('modoOscuro', 'false');
+    }
+  }
+
+  // Cambiar modo
+  if (darkModeToggle) {
+    darkModeToggle.addEventListener('click', function() {
+      if (root.classList.contains('modo-claro')) {
+        root.classList.remove('modo-claro');
+        localStorage.setItem('modoOscuro', 'true');
+        this.innerHTML = '<i class="fas fa-moon"></i>';
+      } else {
+        root.classList.add('modo-claro');
+        localStorage.setItem('modoOscuro', 'false');
+        this.innerHTML = '<i class="fas fa-sun"></i>';
+      }
+    });
+  }
 }
 
 // ==========================
@@ -458,7 +647,6 @@ function debounce(funcion, espera) {
 function duplicarProductosCarrusel() {
   const track = document.querySelector(".compras-track");
   if (track) {
-    // Clonar productos para efecto infinito
     const productos = Array.from(track.querySelectorAll('.producto'));
     productos.forEach(producto => {
       const clon = producto.cloneNode(true);
@@ -467,7 +655,6 @@ function duplicarProductosCarrusel() {
   }
 }
 
-// Precarga de imágenes críticas
 function precargarImagenes() {
   const imagenes = [
     'img/tecnico.jpg',
@@ -482,7 +669,6 @@ function precargarImagenes() {
     img.src = src;
   });
   
-  // Cargar imágenes lazy (IntersectionObserver)
   if ('IntersectionObserver' in window) {
     const lazyImages = document.querySelectorAll('img[loading="lazy"]');
     const imageObserver = new IntersectionObserver((entries, observer) => {
@@ -502,5 +688,39 @@ function precargarImagenes() {
   }
 }
 
-// Iniciar precarga después de que cargue lo esencial
+// Efecto de confeti
+function dispararConfeti() {
+  if (typeof confetti !== 'undefined') {
+    confetti({
+      particleCount: 150,
+      spread: 70,
+      origin: { y: 0.6 },
+      colors: [
+        '#00d9ff',
+        '#8a2be2',
+        '#ff6600',
+        '#ffde59',
+        '#ffffff'
+      ],
+      angle: 60,
+      startVelocity: 30,
+      gravity: 0.5,
+      scalar: 1.2
+    });
+
+    setTimeout(() => {
+      confetti({
+        particleCount: 80,
+        spread: 120,
+        origin: { y: 0.6 },
+        colors: ['#00d9ff', '#ff6600', '#ffffff'],
+        angle: 120,
+        startVelocity: 25,
+        gravity: 0.5,
+        scalar: 1.0
+      });
+    }, 150);
+  }
+}
+
 window.addEventListener('load', precargarImagenes);
